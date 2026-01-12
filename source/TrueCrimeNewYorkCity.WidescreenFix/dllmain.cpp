@@ -1,4 +1,4 @@
-#include "stdafx.h"
+﻿#include "stdafx.h"
 #include <mmsystem.h>
 #pragma comment(lib, "winmm.lib")
 
@@ -19,7 +19,6 @@ struct Screen
 } Screen;
 
 int32_t nFrameLimitType;
-float fFpsLimit;
 
 class FrameLimiter
 {
@@ -98,6 +97,7 @@ private:
 };
 
 FrameLimiter FpsLimiter;
+FrameLimiter FpsLimiterCutscenes;
 
 int32_t nLanguage;
 int32_t __cdecl SetLanguage(LPCSTR lpValueName)
@@ -120,15 +120,6 @@ void __cdecl sub_652340(char a1)
     *fMouseSens *= fSensitivityFactor;
 }
 
-float* flt_8F602C = nullptr;
-float sub_648A70()
-{
-    if (bCutscene && *bCutscene)
-        return *flt_8F602C * 2.0f;
-
-    return *flt_8F602C;
-}
-
 void Init()
 {
     CIniReader iniReader("");
@@ -140,8 +131,14 @@ void Init()
 
     static bool bFixGameSpeed = iniReader.ReadInteger("FRAMELIMIT", "FixGameSpeed", 1) != 0;
     nFrameLimitType = iniReader.ReadInteger("FRAMELIMIT", "FrameLimitType", 1);
-    fFpsLimit = std::clamp(static_cast<float>(iniReader.ReadInteger("FRAMELIMIT", "FpsLimit", 30)), 30.0f, FLT_MAX);
+    fFpsLimit = std::clamp(static_cast<float>(
+        iniReader.ReadInteger("FRAMELIMIT", "FpsLimit", 30)), 30.0f, FLT_MAX);
+    
     fGameSpeedFactor = 30.0f / fFpsLimit;
+
+    float cutsceneFps = (fFpsLimit < 60.0f) ? 30.0f : fFpsLimit;
+    fCutsceneSpeedFactor = 60.0f / cutsceneFps;
+
     fFpsLimit *= fGameSpeedFactor;
 
     fSensitivityFactor = iniReader.ReadFloat("MOUSE", "SensitivityFactor", 0.0f);
@@ -249,20 +246,19 @@ void Init()
             timeBeginPeriod(1);
 
         FpsLimiter.Init(mode, fFpsLimit);
+        FpsLimiterCutscenes.Init(mode, fFpsLimit / fCutsceneSpeedFactor);
 
         pattern = hook::pattern("A1 ? ? ? ? 83 EC 1C");
         shsub_648AC0 = safetyhook::create_inline(pattern.get_first(0), sub_648AC0);
 
-        pattern = hook::pattern("8B 76 ? 8B 16 53");
-        static auto FPSLimiterPresent = safetyhook::create_mid(pattern.get_first(), [](SafetyHookContext& regs)
-        {
-            if (fFpsLimit)
-                FpsLimiter.Sync();
-        });
-
-        pattern = hook::pattern("E8 ? ? ? ? D8 4E ? D9 7C 24");
-        flt_8F602C = *(float**)(injector::GetBranchDestination(pattern.get_first()).as_int() + 2);
-        injector::MakeCALL(pattern.get_first(), sub_648A70, true);
+        pattern = hook::pattern("E8 ? ? ? ? 83 C4 04 5F 5D 53");
+        static auto FPSLimiterGame = safetyhook::create_mid(pattern.get_first(), [](SafetyHookContext& regs)
+            {
+                if (fFpsLimit && ((nLoading && !*nLoading) && (bCutscene && !*bCutscene)))
+                    FpsLimiter.Sync();
+                else if (bCutscene && *bCutscene)
+                    FpsLimiterCutscenes.Sync();
+            });
 
         if (bFixGameSpeed)
         {
@@ -283,9 +279,9 @@ void Init()
 CEXP void InitializeASI()
 {
     std::call_once(CallbackHandler::flag, []()
-    {
-        CallbackHandler::RegisterCallbackAtGetSystemTimeAsFileTime(Init, hook::pattern("BF 94 00 00 00 8B C7"));
-    });
+        {
+            CallbackHandler::RegisterCallbackAtGetSystemTimeAsFileTime(Init, hook::pattern("BF 94 00 00 00 8B C7"));
+        });
 }
 
 BOOL APIENTRY DllMain(HMODULE hModule, DWORD reason, LPVOID lpReserved)

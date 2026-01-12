@@ -1,4 +1,4 @@
-module;
+﻿module;
 
 #include <stdafx.h>
 
@@ -8,6 +8,9 @@ export bool* bPause = nullptr;
 export bool* bCutscene = nullptr;
 export uint32_t* nLoading = nullptr;
 export float fGameSpeedFactor = 1.0f;
+export float fCutsceneSpeedFactor = 1.0f;
+export float fFpsLimit = 30.0f; // default
+
 static float lastMultiplier = 1.0f;
 
 struct SimpleLock
@@ -85,28 +88,79 @@ export BOOL QueryRealPerformanceCounter(LARGE_INTEGER* lpPerformanceCount)
     return QueryPerformanceCounter(lpPerformanceCount);
 }
 
+void SynchronizeTimeBase(float newMultiplier)
+{
+    gtcLock.lock();
+    qpcLock.lock();
+    tgtLock.lock();
+
+    float oldMultiplier = lastMultiplier;
+
+    // Snapshot current real times
+    DWORD now32 = shGetTickCount ? shGetTickCount.unsafe_stdcall<DWORD>() : GetTickCount();
+    ULONGLONG now64 = shGetTickCount64 ? shGetTickCount64.unsafe_stdcall<ULONGLONG>() : GetTickCount64();
+    LARGE_INTEGER qpcNow{};
+    if (shQueryPerformanceCounter)
+        shQueryPerformanceCounter.unsafe_stdcall<BOOL>(&qpcNow);
+    else
+        QueryPerformanceCounter(&qpcNow);
+    DWORD tgtNow = shTimeGetTime ? shTimeGetTime.unsafe_stdcall<DWORD>() : now32;
+
+    // Calculate elapsed game time with the old multiplier and bake it into the offset
+    initialOffset += DWORD((now32 - initialTime) * oldMultiplier);
+    initialOffset64 += ULONGLONG((now64 - initialTime64) * oldMultiplier);
+    initialOffsetQPC += LONGLONG((qpcNow.QuadPart - initialTimeQPC) * oldMultiplier);
+    initialOffsetTGT += DWORD((tgtNow - initialTimeTGT) * oldMultiplier);
+
+    // Reset the start time anchor to "now"
+    initialTime = now32;
+    initialTime64 = now64;
+    initialTimeQPC = qpcNow.QuadPart;
+    initialTimeTGT = tgtNow;
+
+    lastMultiplier = newMultiplier;
+
+    tgtLock.unlock();
+    qpcLock.unlock();
+    gtcLock.unlock();
+}
+
 export float GetSpeedhackMultiplier()
 {
-    return speedMultiplier;
+    float wanted = speedMultiplier;
+
+    if ((bCutscene && *bCutscene) || (nLoading && *nLoading))
+    {
+        wanted = fCutsceneSpeedFactor;
+        fGameSpeedFactor = fCutsceneSpeedFactor;
+    }
+    else
+    {
+        fGameSpeedFactor = 30.0f / fFpsLimit;
+    }
+
+
+    if (wanted != lastMultiplier)
+        SynchronizeTimeBase(wanted);
+
+    return wanted;
 }
 
 // Hooked functions
 DWORD WINAPI GetTickCountHook()
 {
-    float multiplier = GetSpeedhackMultiplier();
     gtcLock.lock();
     DWORD currentTime = shGetTickCount.unsafe_stdcall<DWORD>();
-    DWORD result = (DWORD)((currentTime - initialTime) * multiplier) + initialOffset;
+    DWORD result = (DWORD)((currentTime - initialTime) * GetSpeedhackMultiplier()) + initialOffset;
     gtcLock.unlock();
     return result;
 }
 
 ULONGLONG WINAPI GetTickCount64Hook()
 {
-    float multiplier = GetSpeedhackMultiplier();
     gtcLock.lock();
     ULONGLONG currentTime = shGetTickCount64.unsafe_stdcall<ULONGLONG>();
-    ULONGLONG result = (ULONGLONG)((currentTime - initialTime64) * multiplier) + initialOffset64;
+    ULONGLONG result = (ULONGLONG)((currentTime - initialTime64) * GetSpeedhackMultiplier()) + initialOffset64;
     gtcLock.unlock();
     return result;
 }
@@ -116,14 +170,13 @@ BOOL WINAPI QueryPerformanceCounterHook(LARGE_INTEGER* lpPerformanceCount)
     if (!lpPerformanceCount)
         return FALSE;
 
-    float multiplier = GetSpeedhackMultiplier();
     qpcLock.lock();
     LARGE_INTEGER currentTime;
     BOOL result = shQueryPerformanceCounter.unsafe_stdcall<BOOL>(&currentTime);
 
     if (result)
     {
-        LONGLONG newValue = (LONGLONG)((currentTime.QuadPart - initialTimeQPC) * multiplier) + initialOffsetQPC;
+        LONGLONG newValue = (LONGLONG)((currentTime.QuadPart - initialTimeQPC) * GetSpeedhackMultiplier()) + initialOffsetQPC;
         lpPerformanceCount->QuadPart = newValue;
     }
 
@@ -133,10 +186,9 @@ BOOL WINAPI QueryPerformanceCounterHook(LARGE_INTEGER* lpPerformanceCount)
 
 DWORD WINAPI timeGetTimeHook()
 {
-    float multiplier = GetSpeedhackMultiplier();
     tgtLock.lock();
     DWORD currentTime = shTimeGetTime.unsafe_stdcall<DWORD>();
-    DWORD result = (DWORD)((currentTime - initialTimeTGT) * multiplier) + initialOffsetTGT;
+    DWORD result = (DWORD)((currentTime - initialTimeTGT) * GetSpeedhackMultiplier()) + initialOffsetTGT;
     tgtLock.unlock();
     return result;
 }
@@ -174,15 +226,15 @@ export void InitSpeedhack()
     }
 
     CallbackHandler::RegisterCallback(L"winmm.dll", []()
-    {
-        auto pTimeGetTime = (DWORD(WINAPI*)())GetProcAddress(GetModuleHandle(L"winmm.dll"), "timeGetTime");
-        if (pTimeGetTime)
         {
-            shTimeGetTime = safetyhook::create_inline(pTimeGetTime, timeGetTimeHook);
-            initialOffsetTGT = pTimeGetTime();
-            initialTimeTGT = shTimeGetTime ? shTimeGetTime.unsafe_stdcall<DWORD>() : pTimeGetTime();
-        }
-    });
+            auto pTimeGetTime = (DWORD(WINAPI*)())GetProcAddress(GetModuleHandle(L"winmm.dll"), "timeGetTime");
+            if (pTimeGetTime)
+            {
+                shTimeGetTime = safetyhook::create_inline(pTimeGetTime, timeGetTimeHook);
+                initialOffsetTGT = pTimeGetTime();
+                initialTimeTGT = shTimeGetTime ? shTimeGetTime.unsafe_stdcall<DWORD>() : pTimeGetTime();
+            }
+        });
 
     SetSpeedhackMultiplier(fGameSpeedFactor);
     lastMultiplier = speedMultiplier;

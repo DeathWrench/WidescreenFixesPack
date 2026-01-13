@@ -28,7 +28,7 @@ void __cdecl sub_648AC0(int a1)
     return shsub_648AC0.unsafe_ccall(0);
 }
 
-float fSensitivityFactor = 1.0f;
+float fSensitivityFactor;
 float* fMouseSens = nullptr;
 SafetyHookInline shsub_652340 = {};
 
@@ -54,11 +54,10 @@ void Init()
     static bool bFixFOV = iniReader.ReadInteger("MAIN", "FixFOV", 1) != 0;
 
     static bool bFixGameSpeed = iniReader.ReadInteger("FRAMELIMIT", "FixGameSpeed", 1) != 0;
-    static bool fAlternateSpinlock = iniReader.ReadInteger("FRAMELIMIT", "AlternateSpinlock", 1) != 0;
     fFpsLimit = std::clamp(static_cast<float>(iniReader.ReadInteger("FRAMELIMIT", "FpsLimit", 30)), 30.0f, FLT_MAX);
     //fGameSpeedFactor = iniReader.ReadFloat("FRAMELIMIT", "GameSpeedFactor", 0.5f);
 
-    static auto fSensitivityFactor = iniReader.ReadFloat("MOUSE", "SensitivityFactor", 0.0f);
+    fSensitivityFactor = iniReader.ReadFloat("MOUSE", "SensitivityFactor", 0.0f);
     static bool fAlternateMouseHook = iniReader.ReadBoolean("MOUSE", "AlternateMouseHook", 1) != 0;
 
     if (bSkipIntro)

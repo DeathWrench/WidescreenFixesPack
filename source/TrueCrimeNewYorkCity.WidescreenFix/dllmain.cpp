@@ -1,4 +1,4 @@
-﻿#include "stdafx.h"
+#include "stdafx.h"
 #include <mmsystem.h>
 #pragma comment(lib, "winmm.lib")
 
@@ -19,6 +19,7 @@ struct Screen
 } Screen;
 
 int32_t nFrameLimitType;
+float fFpsLimit;
 
 class FrameLimiter
 {
@@ -131,14 +132,8 @@ void Init()
 
     static bool bFixGameSpeed = iniReader.ReadInteger("FRAMELIMIT", "FixGameSpeed", 1) != 0;
     nFrameLimitType = iniReader.ReadInteger("FRAMELIMIT", "FrameLimitType", 1);
-    fFpsLimit = std::clamp(static_cast<float>(
-        iniReader.ReadInteger("FRAMELIMIT", "FpsLimit", 30)), 30.0f, FLT_MAX);
-    
+    fFpsLimit = std::clamp(static_cast<float>(iniReader.ReadInteger("FRAMELIMIT", "FpsLimit", 30)), 30.0f, FLT_MAX);
     fGameSpeedFactor = 30.0f / fFpsLimit;
-
-    float cutsceneFps = (fFpsLimit < 60.0f) ? 30.0f : fFpsLimit;
-    fCutsceneSpeedFactor = 60.0f / cutsceneFps;
-
     fFpsLimit *= fGameSpeedFactor;
 
     fSensitivityFactor = iniReader.ReadFloat("MOUSE", "SensitivityFactor", 0.0f);
@@ -238,7 +233,7 @@ void Init()
             }
         }; injector::MakeInline<FOVHook>(pattern.get_first(0));
     }
-
+    float cutsceneFps = (iniReader.ReadInteger("FRAMELIMIT", "FpsLimit", 30) < 60) ? 30.0f : 60.0f;
     if (fFpsLimit)
     {
         auto mode = (nFrameLimitType == 2) ? FrameLimiter::FPSLimitMode::FPS_ACCURATE : FrameLimiter::FPSLimitMode::FPS_REALTIME;
@@ -246,7 +241,7 @@ void Init()
             timeBeginPeriod(1);
 
         FpsLimiter.Init(mode, fFpsLimit);
-        FpsLimiterCutscenes.Init(mode, fFpsLimit / fCutsceneSpeedFactor);
+        FpsLimiterCutscenes.Init(mode, cutsceneFps);
 
         pattern = hook::pattern("A1 ? ? ? ? 83 EC 1C");
         shsub_648AC0 = safetyhook::create_inline(pattern.get_first(0), sub_648AC0);

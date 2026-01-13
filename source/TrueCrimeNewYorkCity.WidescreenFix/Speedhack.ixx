@@ -1,9 +1,6 @@
 module;
 
-#include <Windows.h>
-#include <winternl.h>
-#include <atomic>
-#include <thread>
+#include <stdafx.h>
 #include "MinHook.h"
 
 export module Speedhack;
@@ -11,29 +8,19 @@ export module Speedhack;
 // =======================================================
 // Globals
 // =======================================================
-
-export float fGameSpeedFactor = 0.5f;
+//export float fFpsLimit;
 static std::atomic<float> speedMultiplier{ 1.0f };
 static float lastMultiplier = 1.0f;
 
-static std::atomic<bool> isRU{ false };
 static bool versionDetected = false;
 
 // =======================================================
 // US / RU pointers
 // =======================================================
 
-//static volatile uint32_t* bUSPause = nullptr;
-static volatile uint32_t* bUSCutscene = nullptr;
-static volatile uint32_t* bUSLoading = nullptr;
-
-//static volatile uint32_t* bRUPause = nullptr;
-static volatile uint32_t* bRUCutscene = nullptr;
-static volatile uint32_t* bRULoading = nullptr;
-
-//static volatile uint32_t* bPauseCurrent = nullptr;
-static volatile uint32_t* bCutsceneCurrent = nullptr;
-static volatile uint32_t* bLoadingCurrent = nullptr;
+export uint32_t* bPause = nullptr;
+export uint32_t* bCutscene = nullptr;
+export uint32_t* bLoading = nullptr;
 
 // =======================================================
 // CE-style spinlock
@@ -105,6 +92,17 @@ static FnNtQueryPerformanceCounter realNtQueryPerformanceCounter;
 // =======================================================
 // Re-anchor (CRITICAL)
 // =======================================================
+export float fFpsLimit = 60.0f;   // default, safe value
+
+static float ComputeGameSpeed()
+{
+    return (fFpsLimit > 0.0f) ? (30.0f / fFpsLimit) : 1.0f;
+}
+
+static float ComputeCutsceneSpeed()
+{
+    return (fFpsLimit > 0.0f) ? (60.0f / fFpsLimit) : 1.0f;
+}
 
 static void Reanchor(float newMultiplier)
 {
@@ -139,7 +137,6 @@ static void Reanchor(float newMultiplier)
     QPCLock.unlock();
     GTCLock.unlock();
 }
-
 // =======================================================
 // Hooks
 // =======================================================
@@ -176,7 +173,6 @@ BOOL WINAPI QPC_Hook(LARGE_INTEGER* out)
     QPCLock.unlock();
     return TRUE;
 }
-
 // ---------------- NT ----------------
 
 NTSTATUS NTAPI NtQuerySystemTime_Hook(PLARGE_INTEGER out)
@@ -201,6 +197,7 @@ NTSTATUS NTAPI NtQueryPerformanceCounter_Hook(PLARGE_INTEGER out, PLARGE_INTEGER
     return s;
 }
 
+
 // =======================================================
 // Watcher thread
 // =======================================================
@@ -208,10 +205,21 @@ NTSTATUS NTAPI NtQueryPerformanceCounter_Hook(PLARGE_INTEGER out, PLARGE_INTEGER
 static void Watcher()
 {
     while (true) {
-        int cut = bCutsceneCurrent ? *bCutsceneCurrent : 0;
-        int load = bLoadingCurrent ? *bLoadingCurrent : 0;
+        int cut = bCutscene ? *bCutscene : 0;
+        int load = bLoading ? *bLoading : 0;
 
-        float wanted = (cut || load) ? 1.0f : fGameSpeedFactor;
+        float wanted;
+
+        if (load) {
+            wanted = 1.0f;
+        }
+        if (cut) {
+            wanted = ComputeCutsceneSpeed();
+        }
+        if ((!cut) && (!load))
+        {
+            wanted = ComputeGameSpeed();
+        }
 
         if (wanted != lastMultiplier) {
             Reanchor(wanted);
@@ -228,35 +236,15 @@ static void Watcher()
 
 export void InitSpeedhack()
 {
-    HMODULE hGame = GetModuleHandle(nullptr);
-    uintptr_t base = (uintptr_t)hGame;
-
     // ---------- version detection ----------
-    if (!versionDetected) {
-        wchar_t path[MAX_PATH];
-        GetModuleFileNameW(nullptr, path, MAX_PATH);
+    auto pattern = hook::pattern("88 15 ? ? ? ? 8D 45");
+    bPause = *pattern.get_first<uint32_t*>(2);
 
-        WIN32_FILE_ATTRIBUTE_DATA info{};
-        GetFileAttributesExW(path, GetFileExInfoStandard, &info);
+    pattern = hook::pattern("32 C0 88 81 ? ? ? ? A2 ? ? ? ? E8 ? ? ? ? 33 C0 C3");
+    bCutscene = *pattern.get_first<uint32_t*>(9);
 
-        LARGE_INTEGER sz{};
-        sz.HighPart = info.nFileSizeHigh;
-        sz.LowPart = info.nFileSizeLow;
-
-        if (sz.QuadPart == 20135936) isRU = false;
-        else if (sz.QuadPart == 5509120) isRU = true;
-
-        versionDetected = true;
-    }
-
-    if (!isRU) {
-        bCutsceneCurrent = (uint32_t*)(base + 0x387B78);
-        bLoadingCurrent = (uint32_t*)(base + 0x39339C);
-    }
-    else {
-        bCutsceneCurrent = (uint32_t*)(base + 0x388B38);
-        bLoadingCurrent = (uint32_t*)(base + 0x394360);
-    }
+    pattern = hook::pattern("83 3D ? ? ? ? ? 74 ? 84 DB");
+    bLoading = *pattern.get_first<uint32_t*>(2);
 
     // ---------- resolve ----------
     realGetTickCount = GetTickCount;

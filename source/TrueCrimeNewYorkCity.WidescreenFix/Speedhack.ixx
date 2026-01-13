@@ -11,9 +11,8 @@ export module Speedhack;
 //export float fFpsLimit;
 static std::atomic<float> speedMultiplier{ 1.0f };
 static float lastMultiplier = 1.0f;
-
-static bool versionDetected = false;
-export bool fAlternateSpinlock = false;
+//static bool versionDetected = false;
+export bool fAlternateSpinlock;
 // =======================================================
 // US / RU pointers
 // =======================================================
@@ -27,53 +26,67 @@ export uint32_t* bLoading = nullptr;
 // =======================================================
 
 struct SimpleLock {
-    LONG count = 0;         // for CE spinlock
-    DWORD owner = 0;        // thread ID
-    LONG recursion = 0;     // for recursive mode
+    LONG  count = 0;      // lock flag OR recursion count (CE)
+    DWORD owner = 0;
+    LONG  recursion = 0;  // recursive mode only
 
-    void lock() {
+    void lock()
+    {
         DWORD tid = GetCurrentThreadId();
 
-        if (!fAlternateSpinlock) {
-            // CE spinlock
-            if (owner != tid) {
+        if (!fAlternateSpinlock)
+        {
+            // CE-style spinlock (count == recursion)
+            if (owner != tid)
+            {
                 while (InterlockedExchange(&count, 1) != 0)
                     Sleep(0);
+
                 owner = tid;
             }
-            else {
+            else
+            {
                 InterlockedIncrement(&count);
             }
         }
-        else {
-            // Recursive spinlock
-            if (owner == tid) {
+        else
+        {
+            // Explicit recursive spinlock
+            if (owner == tid)
+            {
                 ++recursion;
                 return;
             }
+
             while (InterlockedCompareExchange(&count, 1, 0) != 0)
                 Sleep(0);
+
             owner = tid;
             recursion = 1;
         }
     }
 
-    void unlock() {
-        if (!fAlternateSpinlock) {
-            // Classic CE spinlock
-            if (count == 1)
+    void unlock()
+    {
+        if (!fAlternateSpinlock)
+        {
+            // CE-style
+            LONG v = InterlockedDecrement(&count);
+            if (v == 0)
                 owner = 0;
-            InterlockedDecrement(&count);
         }
-        else {
-            // Recursive spinlock
-            if (--recursion == 0) {
+        else
+        {
+            // Recursive
+            if (--recursion == 0)
+            {
                 owner = 0;
                 InterlockedExchange(&count, 0);
             }
         }
     }
 };
+
 
 
 static SimpleLock GTCLock;
@@ -263,6 +276,8 @@ static void Watcher()
 
 export void InitSpeedhack()
 {
+    CIniReader iniReader("");
+    static  bool fAlternateSpinlock = iniReader.ReadInteger("FRAMELIMIT", "AlternateSpinlock", 1) != 0;
     // ---------- version detection ----------
     auto pattern = hook::pattern("88 15 ? ? ? ? 8D 45");
     bPause = *pattern.get_first<uint32_t*>(2);

@@ -129,7 +129,11 @@ export float GetSpeedhackMultiplier()
 {
     float wanted = speedMultiplier;
 
-    if ((bCutscene && *bCutscene) || (nLoading && *nLoading))
+    if (nLoading && *nLoading)
+    {
+        wanted = 1.0f;
+    }
+    if ((bCutscene && *bCutscene))// || (nLoading && *nLoading))
     {
         wanted = fCutsceneSpeedFactor;
     }
@@ -137,7 +141,6 @@ export float GetSpeedhackMultiplier()
     {
         wanted = fGameSpeedFactor;
     }
-
 
     if (wanted != lastMultiplier)
         SynchronizeTimeBase(wanted);

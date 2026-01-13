@@ -1,4 +1,4 @@
-﻿module;
+module;
 
 #include <stdafx.h>
 
@@ -8,9 +8,6 @@ export bool* bPause = nullptr;
 export bool* bCutscene = nullptr;
 export uint32_t* nLoading = nullptr;
 export float fGameSpeedFactor = 1.0f;
-export float fCutsceneSpeedFactor = 1.0f;
-export float fFpsLimit = 30.0f; // default
-
 static float lastMultiplier = 1.0f;
 
 struct SimpleLock
@@ -129,16 +126,8 @@ export float GetSpeedhackMultiplier()
 {
     float wanted = speedMultiplier;
 
-    if ((bCutscene && *bCutscene) || (nLoading && *nLoading))
-    {
-        wanted = fCutsceneSpeedFactor;
-        fGameSpeedFactor = fCutsceneSpeedFactor;
-    }
-    else
-    {
-        fGameSpeedFactor = 30.0f / fFpsLimit;
-    }
-
+    if ((bPause && *bPause) ||(bCutscene && *bCutscene) || (nLoading && *nLoading))
+        wanted = 1.0f;
 
     if (wanted != lastMultiplier)
         SynchronizeTimeBase(wanted);

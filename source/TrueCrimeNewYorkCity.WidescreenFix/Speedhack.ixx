@@ -1,4 +1,4 @@
-﻿module;
+module;
 
 #include <stdafx.h>
 
@@ -132,11 +132,10 @@ export float GetSpeedhackMultiplier()
     if ((bCutscene && *bCutscene) || (nLoading && *nLoading))
     {
         wanted = fCutsceneSpeedFactor;
-        fGameSpeedFactor = fCutsceneSpeedFactor;
     }
     else
     {
-        fGameSpeedFactor = 30.0f / fFpsLimit;
+        wanted = fGameSpeedFactor;
     }
 
 

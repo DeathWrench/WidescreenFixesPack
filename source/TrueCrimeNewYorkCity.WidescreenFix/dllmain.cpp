@@ -1,182 +1,285 @@
-#include "stdafx.h"
+module;
 
-import Speedhack;
+#include <stdafx.h>
+#include "MinHook.h"
 
-struct Screen
-{
-    int32_t Width;
-    int32_t Height;
-    float fWidth;
-    float fHeight;
-    float fFieldOfView;
-    float fAspectRatio;
-    int32_t Width43;
-    float fWidth43;
-    float fHudScale;
-    float fHudOffset;
-} Screen;
+export module Speedhack;
 
-int32_t nLanguage;
-int32_t __cdecl SetLanguage(LPCSTR lpValueName)
-{
-    return nLanguage;
-}
+// =======================================================
+// Globals
+// =======================================================
+//export float fFpsLimit;
+static std::atomic<float> speedMultiplier{ 1.0f };
+static float lastMultiplier = 1.0f;
 
-SafetyHookInline shsub_648AC0 = {};
-void __cdecl sub_648AC0(int a1)
-{
-    return shsub_648AC0.unsafe_ccall(0);
-}
+static bool versionDetected = false;
 
-void Init()
-{
-    CIniReader iniReader("");
-    bool bSkipIntro = iniReader.ReadInteger("MAIN", "SkipIntro", 1) != 0;
-    bool bDoNotUseRegistryPath = iniReader.ReadInteger("MAIN", "DoNotUseRegistryPath", 1) != 0;
-    nLanguage = iniReader.ReadInteger("MAIN", "Language", -1);
-    static bool bFixHUD = iniReader.ReadInteger("MAIN", "FixHUD", 1) != 0;
-    static bool bFixFOV = iniReader.ReadInteger("MAIN", "FixFOV", 1) != 0;
+// =======================================================
+// US / RU pointers
+// =======================================================
 
-    static bool bFixGameSpeed = iniReader.ReadInteger("FRAMELIMIT", "FixGameSpeed", 1) != 0;
-    fGameSpeedFactor = iniReader.ReadFloat("FRAMELIMIT", "GameSpeedFactor", 0.5f);
+export uint32_t* bPause = nullptr;
+export uint32_t* bCutscene = nullptr;
+export uint32_t* bLoading = nullptr;
 
-    static auto fSensitivityFactor = iniReader.ReadFloat("MOUSE", "SensitivityFactor", 0.0f);
+// =======================================================
+// CE-style spinlock
+// =======================================================
 
-    if (bSkipIntro)
-    {
-        auto pattern = hook::pattern("6A 01 6A 01 68 ? ? ? ? E8 ? ? ? ? 6A 01 6A 01");
-        injector::MakeJMP(pattern.get_first(0), hook::get_pattern("68 ? ? ? ? E8 ? ? ? ? 68 ? ? ? ? E8 ? ? ? ? 83 C4 08 E8 ? ? ? ? A1 ? ? ? ? 3B C3 75 23 6A 10"));
-    }
+struct SimpleLock {
+    LONG count = 0;
+    DWORD owner = 0;
 
-    if (bDoNotUseRegistryPath)
-    {
-        auto pattern = hook::pattern("B9 20 00 00 00 8D 7C 24 18 F3 AB 8D 44 24 0C"); //0x496F27
-        struct RegHook
-        {
-            void operator()(injector::reg_pack& regs)
-            {
-                regs.ecx = 0x20;
-                regs.edi = (regs.esp + 0x18);
-
-                GetModuleFileNameA(NULL, (char*)regs.edi, MAX_PATH);
-                *strrchr((char*)regs.edi, '\\') = '\0';
-                strcat((char*)regs.edi, "\\data");
-            }
-        }; injector::MakeInline<RegHook>(pattern.get_first(0), pattern.get_first(11));
-        injector::MakeJMP(pattern.get_first(11), hook::pattern("8D 44 24 18 8D 50 01").count(2).get(1).get<uintptr_t>(0), true); //0x496FD8
-    }
-
-    if (nLanguage >= 0)
-    {
-        auto pattern = hook::pattern("E8 ? ? ? ? 8B 04 85 ? ? ? ? 83 C4 04 C3"); //0x495E95
-        injector::MakeCALL(pattern.count(1).get(0).get<uintptr_t>(0), SetLanguage, true);
-        pattern = hook::pattern("68 ? ? ? ? E8 ? ? ? ? 83 C4 04 C3"); //0x495EB5
-        injector::MakeCALL(pattern.count(2).get(1).get<uintptr_t>(5), SetLanguage, true);
-    }
-
-    auto pattern = hook::pattern("89 55 00 89 5D 04 C7 45 08 15 00 00 00 89 7D 0C"); //0x649478
-    struct ResHook
-    {
-        void operator()(injector::reg_pack& regs)
-        {
-            Screen.Width = regs.edx;
-            Screen.Height = regs.ebx;
-            *(uint32_t*)(regs.ebp + 0x00) = Screen.Width;
-            *(uint32_t*)(regs.ebp + 0x04) = Screen.Height;
-
-            Screen.fWidth = static_cast<float>(Screen.Width);
-            Screen.fHeight = static_cast<float>(Screen.Height);
-            Screen.fAspectRatio = (Screen.fWidth / Screen.fHeight);
-            Screen.Width43 = static_cast<uint32_t>(Screen.fHeight * (4.0f / 3.0f));
-            Screen.fWidth43 = static_cast<float>(Screen.Width43);
-            Screen.fHudOffset = (1.0f / (Screen.fHeight * (4.0f / 3.0f))) * ((Screen.fWidth - Screen.fHeight * (4.0f / 3.0f)) / 2.0f);
+    void lock() {
+        DWORD tid = GetCurrentThreadId();
+        if (owner != tid) {
+            while (InterlockedExchange(&count, 1) != 0)
+                Sleep(0);
+            owner = tid;
         }
-    }; injector::MakeInline<ResHook>(pattern.get_first(0), pattern.get_first(6));
-
-    if (bFixHUD)
-    {
-        uintptr_t dword_654780 = (uintptr_t)hook::pattern("8B 44 24 04 F3 0F 2A C0 0F 28 C8").count(1).get(0).get<uintptr_t>(0);
-        struct HudScaleHook
-        {
-            void operator()(injector::reg_pack& regs)
-            {
-                int32_t a2 = *(int32_t*)(regs.esp + 4);
-                if (a2 == Screen.Width)
-                    a2 = Screen.Width43;
-
-                *(float*)(regs.ecx + 0xE0) = (float)a2 * (1.0f / 640.0f);
-                *(int32_t*)(regs.ecx + 0xD8) = a2;
-                *(float*)(regs.ecx + 0xE8) = (1.0f / (float)a2);
-            }
-        }; injector::MakeInline<HudScaleHook>(dword_654780, dword_654780 + 53);
-
-        pattern = hook::pattern("F3 0F 11 44 24 24 F3 0F 11 44 24 20 F3 0F 11"); //0x65E870
-        struct HudPosHook
-        {
-            void operator()(injector::reg_pack& regs)
-            {
-                *(float*)(regs.esp + 0x18) = Screen.fHudOffset;
-                *(float*)(regs.esp + 0x20) = 1.0f;
-                *(float*)(regs.esp + 0x24) = 1.0f;
-                *(float*)(regs.esp + 0x28) = 1.0f;
-                *(float*)(regs.esp + 0x2C) = 1.0f;
-            }
-        }; injector::MakeInline<HudPosHook>(pattern.get_first(0), pattern.get_first(24));
-        injector::WriteMemory(pattern.get_first(24 - 4), 0x9001F883, true); //cmp     eax, 1
+        else {
+            InterlockedIncrement(&count);
+        }
     }
 
-    if (bFixFOV)
-    {
-        pattern = hook::pattern("F3 0F 10 45 08 56 8B F1 8B 46 1C"); //0x64BDF9 
-        struct FOVHook
-        {
-            void operator()(injector::reg_pack& regs)
-            {
-                Screen.fFieldOfView = *(float*)(regs.ebp + 0x8) * (((4.0f / 3.0f)) / (Screen.fAspectRatio));
-                regs.xmm0.f32[0] = Screen.fFieldOfView;
-            }
-        }; injector::MakeInline<FOVHook>(pattern.get_first(0));
+    void unlock() {
+        if (count == 1)
+            owner = 0;
+        InterlockedDecrement(&count);
     }
+};
 
-    {
-        pattern = hook::pattern("A1 ? ? ? ? 83 EC 1C");
-        shsub_648AC0 = safetyhook::create_inline(pattern.get_first(0), sub_648AC0);
-    }
+static SimpleLock GTCLock;
+static SimpleLock QPCLock;
+static SimpleLock SYSLock;  // new lock for NtQuerySystemTime
 
-    if (bFixGameSpeed)
-    {
-        InitSpeedhack();
-    }
+// =======================================================
+// Anchors
+// =======================================================
 
-    if (fSensitivityFactor)
-    {
-        pattern = hook::pattern("D8 0D ? ? ? ? 6A 00 68 ? ? ? ? 8B CE D9 1D ? ? ? ? E8 ? ? ? ? D8 0D ? ? ? ? 6A 00");
-        injector::WriteMemory(pattern.get_first(2), &fSensitivityFactor, true);
-        pattern = hook::pattern("D8 0D ? ? ? ? 6A 00 68 ? ? ? ? 8B CE D9 1D ? ? ? ? E8 ? ? ? ? D9 1D ? ? ? ? 6A 00");
-        injector::WriteMemory(pattern.get_first(2), &fSensitivityFactor, true);
-        pattern = hook::pattern("D8 0D ? ? ? ? 68 ? ? ? ? 68 ? ? ? ? D8 0D ? ? ? ? 8B CE D9 1D ? ? ? ? E8");
-        injector::WriteMemory(pattern.get_first(2), &fSensitivityFactor, true);
-        pattern = hook::pattern("D8 0D ? ? ? ? 68 ? ? ? ? 68 ? ? ? ? 8B CE D9 1D ? ? ? ? E8 ? ? ? ? 68");
-        injector::WriteMemory(pattern.get_first(2), &fSensitivityFactor, true);
-    }
+static DWORD      initialTime32 = 0;
+static DWORD      initialOffset32 = 0;
+
+static ULONGLONG  initialTime64 = 0;
+static ULONGLONG  initialOffset64 = 0;
+
+static LONGLONG   initialTimeQPC = 0;
+static LONGLONG   initialOffsetQPC = 0;
+
+static LONGLONG   initialTimeSys = 0;    // new anchor for NtQuerySystemTime
+static LONGLONG   initialOffsetSys = 0;  // new offset for NtQuerySystemTime
+
+// =======================================================
+// Original functions
+// =======================================================
+
+using FnGetTickCount = DWORD(WINAPI*)();
+using FnGetTickCount64 = ULONGLONG(WINAPI*)();
+using FnTimeGetTime = DWORD(WINAPI*)();
+using FnQPC = BOOL(WINAPI*)(LARGE_INTEGER*);
+
+using FnNtQuerySystemTime = NTSTATUS(NTAPI*)(PLARGE_INTEGER);
+using FnNtQueryPerformanceCounter = NTSTATUS(NTAPI*)(PLARGE_INTEGER, PLARGE_INTEGER);
+
+static FnGetTickCount realGetTickCount;
+static FnGetTickCount64 realGetTickCount64;
+static FnTimeGetTime realTimeGetTime;
+static FnQPC realQPC;
+
+static FnNtQuerySystemTime realNtQuerySystemTime;
+static FnNtQueryPerformanceCounter realNtQueryPerformanceCounter;
+
+// =======================================================
+// Re-anchor (CRITICAL)
+// =======================================================
+export float fFpsLimit = 60.0f;   // default, safe value
+
+static float ComputeGameSpeed()
+{
+    return (fFpsLimit > 0.0f) ? (30.0f / fFpsLimit) : 1.0f;
 }
 
-CEXP void InitializeASI()
+static float ComputeCutsceneSpeed()
 {
-    std::call_once(CallbackHandler::flag, []()
-    {
-        CallbackHandler::RegisterCallback(Init, hook::pattern("BF 94 00 00 00 8B C7"));
-    });
+    return (fFpsLimit > 0.0f) ? (60.0f / fFpsLimit) : 1.0f;
 }
 
-BOOL APIENTRY DllMain(HMODULE hModule, DWORD reason, LPVOID lpReserved)
+static void Reanchor(float newMultiplier)
 {
-    if (reason == DLL_PROCESS_ATTACH)
-    {
-        if (!IsUALPresent()) { InitializeASI(); }
-    }
-    if (reason == DLL_PROCESS_DETACH)
-    {
-    }
+    GTCLock.lock();
+    QPCLock.lock();
+    SYSLock.lock();
+
+    float old = speedMultiplier.load();
+
+    DWORD now32 = realGetTickCount();
+    ULONGLONG now64 = realGetTickCount64();
+
+    LARGE_INTEGER qpcNow{};
+    realQPC(&qpcNow);
+
+    LARGE_INTEGER sysNow{};
+    realNtQuerySystemTime(&sysNow);
+
+    initialOffset32 += DWORD((now32 - initialTime32) * old);
+    initialOffset64 += ULONGLONG((now64 - initialTime64) * old);
+    initialOffsetQPC += LONGLONG((qpcNow.QuadPart - initialTimeQPC) * old);
+    initialOffsetSys += LONGLONG((sysNow.QuadPart - initialTimeSys) * old);
+
+    initialTime32 = now32;
+    initialTime64 = now64;
+    initialTimeQPC = qpcNow.QuadPart;
+    initialTimeSys = sysNow.QuadPart;
+
+    speedMultiplier.store(newMultiplier);
+
+    SYSLock.unlock();
+    QPCLock.unlock();
+    GTCLock.unlock();
+}
+// =======================================================
+// Hooks
+// =======================================================
+
+DWORD WINAPI GetTickCount_Hook()
+{
+    GTCLock.lock();
+    DWORD t = realGetTickCount();
+    DWORD r = initialOffset32 + DWORD((t - initialTime32) * speedMultiplier.load());
+    GTCLock.unlock();
+    return r;
+}
+
+ULONGLONG WINAPI GetTickCount64_Hook()
+{
+    GTCLock.lock();
+    ULONGLONG t = realGetTickCount64();
+    ULONGLONG r = initialOffset64 + ULONGLONG((t - initialTime64) * speedMultiplier.load());
+    GTCLock.unlock();
+    return r;
+}
+
+DWORD WINAPI timeGetTime_Hook()
+{
+    return GetTickCount_Hook();
+}
+
+BOOL WINAPI QPC_Hook(LARGE_INTEGER* out)
+{
+    QPCLock.lock();
+    LARGE_INTEGER t{};
+    realQPC(&t);
+    out->QuadPart = initialOffsetQPC + LONGLONG((t.QuadPart - initialTimeQPC) * speedMultiplier.load());
+    QPCLock.unlock();
     return TRUE;
+}
+// ---------------- NT ----------------
+
+NTSTATUS NTAPI NtQuerySystemTime_Hook(PLARGE_INTEGER out)
+{
+    NTSTATUS s = realNtQuerySystemTime(out);
+    if (NT_SUCCESS(s)) {
+        SYSLock.lock();
+        out->QuadPart = initialOffsetSys + LONGLONG((out->QuadPart - initialTimeSys) * speedMultiplier.load());
+        SYSLock.unlock();
+    }
+    return s;
+}
+
+NTSTATUS NTAPI NtQueryPerformanceCounter_Hook(PLARGE_INTEGER out, PLARGE_INTEGER freq)
+{
+    NTSTATUS s = realNtQueryPerformanceCounter(out, freq);
+    if (NT_SUCCESS(s)) {
+        QPCLock.lock();
+        out->QuadPart = initialOffsetQPC + LONGLONG((out->QuadPart - initialTimeQPC) * speedMultiplier.load());
+        QPCLock.unlock();
+    }
+    return s;
+}
+
+
+// =======================================================
+// Watcher thread
+// =======================================================
+
+static void Watcher()
+{
+    while (true) {
+        int cut = bCutscene ? *bCutscene : 0;
+        int load = bLoading ? *bLoading : 0;
+
+        float wanted;
+
+        if (load) {
+            wanted = 1.0f;
+        }
+        if (cut) {
+            wanted = ComputeCutsceneSpeed();
+        }
+        if ((!cut) && (!load))
+        {
+            wanted = ComputeGameSpeed();
+        }
+
+        if (wanted != lastMultiplier) {
+            Reanchor(wanted);
+            lastMultiplier = wanted;
+        }
+
+        Sleep(50);
+    }
+}
+
+// =======================================================
+// Init
+// =======================================================
+
+export void InitSpeedhack()
+{
+    // ---------- version detection ----------
+    auto pattern = hook::pattern("88 15 ? ? ? ? 8D 45");
+    bPause = *pattern.get_first<uint32_t*>(2);
+
+    pattern = hook::pattern("32 C0 88 81 ? ? ? ? A2 ? ? ? ? E8 ? ? ? ? 33 C0 C3");
+    bCutscene = *pattern.get_first<uint32_t*>(9);
+
+    pattern = hook::pattern("83 3D ? ? ? ? ? 74 ? 84 DB");
+    bLoading = *pattern.get_first<uint32_t*>(2);
+
+    // ---------- resolve ----------
+    realGetTickCount = GetTickCount;
+    realGetTickCount64 = GetTickCount64;
+    realTimeGetTime = (FnTimeGetTime)GetProcAddress(GetModuleHandleW(L"winmm"), "timeGetTime");
+    realQPC = QueryPerformanceCounter;
+
+    HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
+    realNtQuerySystemTime = (FnNtQuerySystemTime)GetProcAddress(ntdll, "NtQuerySystemTime");
+    realNtQueryPerformanceCounter = (FnNtQueryPerformanceCounter)GetProcAddress(ntdll, "NtQueryPerformanceCounter");
+
+    // ---------- anchors ----------
+    initialTime32 = initialOffset32 = realGetTickCount();
+    initialTime64 = initialOffset64 = realGetTickCount64();
+
+    LARGE_INTEGER q{};
+    realQPC(&q);
+    initialTimeQPC = initialOffsetQPC = q.QuadPart;
+
+    LARGE_INTEGER s{};
+    realNtQuerySystemTime(&s);
+    initialTimeSys = initialOffsetSys = s.QuadPart;
+
+    // ---------- hooks ----------
+    MH_Initialize();
+
+    MH_CreateHook(realGetTickCount, GetTickCount_Hook, (void**)&realGetTickCount);
+    MH_CreateHook(realGetTickCount64, GetTickCount64_Hook, (void**)&realGetTickCount64);
+    MH_CreateHook(realTimeGetTime, timeGetTime_Hook, (void**)&realTimeGetTime);
+    MH_CreateHook(realQPC, QPC_Hook, (void**)&realQPC);
+    //MH_CreateHook(realNtQuerySystemTime, NtQuerySystemTime_Hook, (void**)&realNtQuerySystemTime);
+    //MH_CreateHook(realNtQueryPerformanceCounter, NtQueryPerformanceCounter_Hook, (void**)&realNtQueryPerformanceCounter);
+
+    MH_EnableHook(MH_ALL_HOOKS);
+
+    // ---------- watcher ----------
+    std::thread(Watcher).detach();
 }

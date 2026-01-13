@@ -13,7 +13,7 @@ static std::atomic<float> speedMultiplier{ 1.0f };
 static float lastMultiplier = 1.0f;
 
 static bool versionDetected = false;
-
+export bool fAlternateSpinlock = false;
 // =======================================================
 // US / RU pointers
 // =======================================================
@@ -27,27 +27,54 @@ export uint32_t* bLoading = nullptr;
 // =======================================================
 
 struct SimpleLock {
-    LONG count = 0;
-    DWORD owner = 0;
+    LONG count = 0;         // for CE spinlock
+    DWORD owner = 0;        // thread ID
+    LONG recursion = 0;     // for recursive mode
 
     void lock() {
         DWORD tid = GetCurrentThreadId();
-        if (owner != tid) {
-            while (InterlockedExchange(&count, 1) != 0)
-                Sleep(0);
-            owner = tid;
+
+        if (!fAlternateSpinlock) {
+            // CE spinlock
+            if (owner != tid) {
+                while (InterlockedExchange(&count, 1) != 0)
+                    Sleep(0);
+                owner = tid;
+            }
+            else {
+                InterlockedIncrement(&count);
+            }
         }
         else {
-            InterlockedIncrement(&count);
+            // Recursive spinlock
+            if (owner == tid) {
+                ++recursion;
+                return;
+            }
+            while (InterlockedCompareExchange(&count, 1, 0) != 0)
+                Sleep(0);
+            owner = tid;
+            recursion = 1;
         }
     }
 
     void unlock() {
-        if (count == 1)
-            owner = 0;
-        InterlockedDecrement(&count);
+        if (!fAlternateSpinlock) {
+            // Classic CE spinlock
+            if (count == 1)
+                owner = 0;
+            InterlockedDecrement(&count);
+        }
+        else {
+            // Recursive spinlock
+            if (--recursion == 0) {
+                owner = 0;
+                InterlockedExchange(&count, 0);
+            }
+        }
     }
 };
+
 
 static SimpleLock GTCLock;
 static SimpleLock QPCLock;

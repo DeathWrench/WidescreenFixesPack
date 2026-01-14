@@ -273,7 +273,6 @@ export void InitSpeedhack()
         });
 
     SetSpeedhackMultiplier(fGameSpeedFactor);
-    lastMultiplier = speedMultiplier;
 
     tgtLock.unlock();
     gtcLock.unlock();

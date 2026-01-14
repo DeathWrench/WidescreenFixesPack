@@ -136,7 +136,7 @@ void Init()
 
     fGameSpeedFactor = 30.0f / fFpsLimit;
 
-    float cutsceneFps = (fFpsLimit < 60.0f) ? 30.0f : fFpsLimit;
+    float cutsceneFps = (fFpsLimit < 60.0f) ? 60.0f : fFpsLimit;
     fCutsceneSpeedFactor = 60.0f / cutsceneFps;
 
     fFpsLimit *= fGameSpeedFactor;
@@ -311,3 +311,4 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD reason, LPVOID lpReserved)
     }
     return TRUE;
 }
+

@@ -133,9 +133,8 @@ void Init()
     nFrameLimitType = iniReader.ReadInteger("FRAMELIMIT", "FrameLimitType", 1);
     fFpsLimit = std::clamp(static_cast<float>(
         iniReader.ReadInteger("FRAMELIMIT", "FpsLimit", 30)), 30.0f, FLT_MAX);
-    
-    float userFps = (fFpsLimit < 60.0f) ? 60.0f : fFpsLimit;
-    fGameSpeedFactor = 30.0f / userFps;
+
+    fGameSpeedFactor = 30.0f / fFpsLimit;
 
     float cutsceneFps = (fFpsLimit < 60.0f) ? 60.0f : fFpsLimit;
     fCutsceneSpeedFactor = 60.0f / cutsceneFps;
@@ -312,5 +311,4 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD reason, LPVOID lpReserved)
     }
     return TRUE;
 }
-
 

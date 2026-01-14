@@ -9,41 +9,73 @@ export bool* bCutscene = nullptr;
 export uint32_t* nLoading = nullptr;
 export float fGameSpeedFactor = 1.0f;
 export float fCutsceneSpeedFactor = 1.0f;
-export float fFpsLimit = 30.0f; // default
+export float fFpsLimit; // default
+export bool fAlternateSpinlock;
 
 static float lastMultiplier = 1.0f;
 
 struct SimpleLock
 {
-    LONG count = 0;
+    LONG  count = 0;     // CE: recursion+lock | Recursive: binary lock
     DWORD owner = 0;
-    LONG recursion = 0;
+    LONG  recursion = 0; // Recursive only
 
     void lock()
     {
         DWORD tid = GetCurrentThreadId();
-        if (owner == tid)
+
+        if (!fAlternateSpinlock)
         {
-            ++recursion;
-            return;
+            // ===== CE-style =====
+            if (owner != tid)
+            {
+                while (InterlockedExchange(&count, 1) != 0)
+                    Sleep(0);
+                owner = tid;
+            }
+            else
+            {
+                InterlockedIncrement(&count);
+            }
         }
+        else
+        {
+            // ===== Recursive =====
+            if (owner == tid)
+            {
+                ++recursion;
+                return;
+            }
 
-        while (InterlockedCompareExchange(&count, 1, 0) != 0)
-            Sleep(0);
+            while (InterlockedCompareExchange(&count, 1, 0) != 0)
+                Sleep(0);
 
-        owner = tid;
-        recursion = 1;
+            owner = tid;
+            recursion = 1;
+        }
     }
 
     void unlock()
     {
-        if (--recursion == 0)
+        if (!fAlternateSpinlock)
         {
-            owner = 0;
-            InterlockedExchange(&count, 0);
+            // ===== CE-style =====
+            if (count == 1)
+                owner = 0;
+            InterlockedDecrement(&count);
+        }
+        else
+        {
+            // ===== Recursive =====
+            if (--recursion == 0)
+            {
+                owner = 0;
+                InterlockedExchange(&count, 0);
+            }
         }
     }
 };
+
 
 SafetyHookInline shGetTickCount = {};
 SafetyHookInline shGetTickCount64 = {};
@@ -137,7 +169,7 @@ export float GetSpeedhackMultiplier()
     {
         wanted = fCutsceneSpeedFactor;
     }
-    else
+    if ((bCutscene && !*bCutscene) && (nLoading && !*nLoading))
     {
         wanted = fGameSpeedFactor;
     }
@@ -197,6 +229,8 @@ DWORD WINAPI timeGetTimeHook()
 
 export void InitSpeedhack()
 {
+    CIniReader iniReader("");
+    static  bool fAlternateSpinlock = iniReader.ReadInteger("FRAMELIMIT", "AlternateSpinlock", 1) != 0;
     auto pattern = hook::pattern("88 15 ? ? ? ? 8D 45");
     bPause = *pattern.get_first<bool*>(2);
 

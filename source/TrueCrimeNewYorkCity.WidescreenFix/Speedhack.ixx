@@ -5,14 +5,18 @@ module;
 export module Speedhack;
 
 CIniReader iniReader("");
-export bool b30FpsCutscenes = iniReader.ReadInteger("FRAMELIMIT", "30FpsCutscenes", 1) != 0;
+
 export bool* bPause = nullptr;
 export bool* bCutscene = nullptr;
 export uint32_t* nLoading = nullptr;
+
 export float fGameSpeedFactor = 1.0f;
 export float fCutsceneSpeedFactor = 1.0f;
-export float fFpsLimit; // default
-export bool* fAlternateSpinlock = nullptr;
+export float fFpsLimit = 30.0f; // default
+
+export bool fAlternateSpinlock = false;
+export bool b30FpsCutscenes = false;
+
 static float lastMultiplier = 1.0f;
 
 struct SimpleLock
@@ -161,24 +165,9 @@ void SynchronizeTimeBase(float newMultiplier)
 export float GetSpeedhackMultiplier()
 {
     float wanted = speedMultiplier;
-
-    if (nLoading && *nLoading)
-    {
-        wanted = 1.0f;
-    }
-    if ((bCutscene && *bCutscene) && !b30FpsCutscenes)
-    {
-        wanted = fCutsceneSpeedFactor;
-    }
-    if ((bCutscene && *bCutscene) && b30FpsCutscenes)
-    {
-        wanted = 1.0f;
-    }
-    if ((bCutscene && !*bCutscene) && (nLoading && !*nLoading))
-    {
-        wanted = fGameSpeedFactor;
-    }
-
+    const bool loading = (nLoading && *nLoading);
+    const bool cutscene = (bCutscene && *bCutscene);
+    wanted = (loading || cutscene) ? 1.0f : fGameSpeedFactor;
     if (wanted != lastMultiplier)
         SynchronizeTimeBase(wanted);
 
@@ -235,7 +224,7 @@ DWORD WINAPI timeGetTimeHook()
 export void InitSpeedhack()
 {
     CIniReader iniReader("");
-    static  bool fAlternateSpinlock = iniReader.ReadInteger("FRAMELIMIT", "AlternateSpinlock", 1) != 0;
+    fAlternateSpinlock = iniReader.ReadInteger("FRAMELIMIT", "AlternateSpinlock", 1) != 0;
     auto pattern = hook::pattern("88 15 ? ? ? ? 8D 45");
     bPause = *pattern.get_first<bool*>(2);
 

@@ -1,4 +1,4 @@
-﻿#include "stdafx.h"
+#include "stdafx.h"
 #include <mmsystem.h>
 #pragma comment(lib, "winmm.lib")
 
@@ -133,7 +133,7 @@ void Init()
     nFrameLimitType = iniReader.ReadInteger("FRAMELIMIT", "FrameLimitType", 1);
     fFpsLimit = std::clamp(static_cast<float>(
         iniReader.ReadInteger("FRAMELIMIT", "FpsLimit", 30)), 30.0f, FLT_MAX);
-    
+
     fGameSpeedFactor = 30.0f / fFpsLimit;
 
     float cutsceneFps = (fFpsLimit < 60.0f) ? 30.0f : fFpsLimit;
@@ -142,6 +142,7 @@ void Init()
     fFpsLimit *= fGameSpeedFactor;
 
     fSensitivityFactor = iniReader.ReadFloat("MOUSE", "SensitivityFactor", 0.0f);
+    static bool fAlternateMouseHook = iniReader.ReadBoolean("MOUSE", "AlternateMouseHook", 1) != 0;
 
     if (bSkipIntro)
     {
@@ -268,11 +269,24 @@ void Init()
 
     if (fSensitivityFactor)
     {
-        pattern = hook::pattern("F3 0F 11 05 ? ? ? ? C7 05 ? ? ? ? ? ? ? ? 0F 84");
-        fMouseSens = *pattern.get_first<float*>(4);
+        if (!fAlternateMouseHook) {
+            pattern = hook::pattern("D8 0D ? ? ? ? 6A 00 68 ? ? ? ? 8B CE D9 1D ? ? ? ? E8 ? ? ? ? D8 0D ? ? ? ? 6A 00");
+            injector::WriteMemory(pattern.get_first(2), &fSensitivityFactor, true);
+            pattern = hook::pattern("D8 0D ? ? ? ? 6A 00 68 ? ? ? ? 8B CE D9 1D ? ? ? ? E8 ? ? ? ? D9 1D ? ? ? ? 6A 00");
+            injector::WriteMemory(pattern.get_first(2), &fSensitivityFactor, true);
+            pattern = hook::pattern("D8 0D ? ? ? ? 68 ? ? ? ? 68 ? ? ? ? D8 0D ? ? ? ? 8B CE D9 1D ? ? ? ? E8");
+            injector::WriteMemory(pattern.get_first(2), &fSensitivityFactor, true);
+            pattern = hook::pattern("D8 0D ? ? ? ? 68 ? ? ? ? 68 ? ? ? ? 8B CE D9 1D ? ? ? ? E8 ? ? ? ? 68");
+            injector::WriteMemory(pattern.get_first(2), &fSensitivityFactor, true);
+        }
+        else
+        {
+            pattern = hook::pattern("F3 0F 11 05 ? ? ? ? C7 05 ? ? ? ? ? ? ? ? 0F 84");
+            fMouseSens = *pattern.get_first<float*>(4);
 
-        pattern = hook::pattern("80 7C 24 ? ? F3 0F 10 05 ? ? ? ? 56");
-        shsub_652340 = safetyhook::create_inline(pattern.get_first(0), sub_652340);
+            pattern = hook::pattern("80 7C 24 ? ? F3 0F 10 05 ? ? ? ? 56");
+            shsub_652340 = safetyhook::create_inline(pattern.get_first(0), sub_652340);
+        }
     }
 }
 

@@ -1,5 +1,8 @@
 #include "stdafx.h"
 #include <mmsystem.h>
+#include <filesystem>
+#include <fstream>
+#include <chrono>
 #pragma comment(lib, "winmm.lib")
 
 import Speedhack;
@@ -98,6 +101,7 @@ private:
 
 FrameLimiter FpsLimiter;
 FrameLimiter FpsLimiterCutscenes;
+FrameLimiter FpsLimiterCutscenes30Locked;
 
 int32_t nLanguage;
 int32_t __cdecl SetLanguage(LPCSTR lpValueName)
@@ -120,6 +124,130 @@ void __cdecl sub_652340(char a1)
     *fMouseSens *= fSensitivityFactor;
 }
 
+namespace fs = std::filesystem;
+static std::atomic<bool> g_BackupThreadRunning{ false };
+static HANDLE g_BackupDirHandle = INVALID_HANDLE_VALUE;
+
+static void BackupSavedGamesIfChanged()
+{
+    char userProfile[MAX_PATH]{};
+    GetEnvironmentVariableA("USERPROFILE", userProfile, MAX_PATH);
+
+    fs::path source = fs::path(userProfile) / "Documents/TCNYC/Saved Games";
+    fs::path backupRoot = fs::path(userProfile) / "Documents/TCNYC/Backups";
+    fs::path stateFile = backupRoot / "last_backup_time.txt";
+
+    if (!fs::exists(source))
+        return;
+
+    fs::create_directories(backupRoot);
+
+    // Find newest modification time in Saved Games
+    fs::file_time_type newestTime = fs::file_time_type::min();
+
+    for (const auto& entry : fs::recursive_directory_iterator(source))
+    {
+        if (entry.is_regular_file())
+        {
+            auto t = fs::last_write_time(entry);
+            if (t > newestTime)
+                newestTime = t;
+        }
+    }
+
+    // Load last backup time
+    fs::file_time_type lastBackupTime = fs::file_time_type::min();
+    if (fs::exists(stateFile))
+    {
+        std::ifstream in(stateFile);
+        int64_t stored{};
+        if (in >> stored)
+            lastBackupTime = fs::file_time_type(fs::file_time_type::duration(stored));
+
+
+    }
+
+    // No changes → do nothing
+    if (newestTime <= lastBackupTime)
+        return;
+
+    // Create timestamped backup folder
+    SYSTEMTIME st;
+    GetLocalTime(&st);
+
+    char folderName[64];
+    sprintf_s(folderName, "SavedGames_%04d-%02d-%02d_%02d-%02d-%02d",
+        st.wYear, st.wMonth, st.wDay,
+        st.wHour, st.wMinute, st.wSecond);
+
+    fs::path backupDest = backupRoot / folderName;
+    fs::create_directories(backupDest);
+
+    // Copy entire folder
+    fs::copy(
+        source,
+        backupDest,
+        fs::copy_options::recursive | fs::copy_options::overwrite_existing
+    );
+
+    // Save new backup time
+    std::ofstream out(stateFile, std::ios::trunc);
+    out << newestTime.time_since_epoch().count();
+}
+
+static void SavedGamesWatcherThread()
+{
+    char userProfile[MAX_PATH]{};
+    GetEnvironmentVariableA("USERPROFILE", userProfile, MAX_PATH);
+
+    fs::path watchPath = fs::path(userProfile) / "Documents/TCNYC/Saved Games";
+    if (!fs::exists(watchPath))
+        return;
+
+    g_BackupDirHandle = CreateFileW(
+        watchPath.c_str(),
+        FILE_LIST_DIRECTORY,
+        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+        nullptr,
+        OPEN_EXISTING,
+        FILE_FLAG_BACKUP_SEMANTICS,
+        nullptr
+    );
+
+    if (g_BackupDirHandle == INVALID_HANDLE_VALUE)
+        return;
+
+    BYTE buffer[4096];
+    DWORD bytesReturned;
+
+    while (g_BackupThreadRunning)
+    {
+        if (ReadDirectoryChangesW(
+            g_BackupDirHandle,
+            buffer,
+            sizeof(buffer),
+            TRUE, // recursive
+            FILE_NOTIFY_CHANGE_FILE_NAME |
+            FILE_NOTIFY_CHANGE_DIR_NAME |
+            FILE_NOTIFY_CHANGE_LAST_WRITE |
+            FILE_NOTIFY_CHANGE_SIZE,
+            &bytesReturned,
+            nullptr,
+            nullptr))
+        {
+            // Folder changed → back it up
+            BackupSavedGamesIfChanged();
+        }
+        else
+        {
+            Sleep(1000);
+        }
+    }
+
+    CloseHandle(g_BackupDirHandle);
+    g_BackupDirHandle = INVALID_HANDLE_VALUE;
+}
+
 void Init()
 {
     CIniReader iniReader("");
@@ -133,6 +261,7 @@ void Init()
     nFrameLimitType = iniReader.ReadInteger("FRAMELIMIT", "FrameLimitType", 1);
     fFpsLimit = std::clamp(static_cast<float>(
         iniReader.ReadInteger("FRAMELIMIT", "FpsLimit", 30)), 30.0f, FLT_MAX);
+    bool bEnableSavedGamesBackup = iniReader.ReadInteger("BACKUP", "EnableSavedGamesBackup", 0) != 0;
 
     fGameSpeedFactor = 30.0f / fFpsLimit;
 
@@ -195,6 +324,12 @@ void Init()
         }
     }; injector::MakeInline<ResHook>(pattern.get_first(0), pattern.get_first(6));
 
+    if (bEnableSavedGamesBackup && !g_BackupThreadRunning)
+    {
+        g_BackupThreadRunning = true;
+        std::thread(SavedGamesWatcherThread).detach();
+    }
+
     if (bFixHUD)
     {
         uintptr_t dword_654780 = (uintptr_t)hook::pattern("8B 44 24 04 F3 0F 2A C0 0F 28 C8").count(1).get(0).get<uintptr_t>(0);
@@ -248,6 +383,7 @@ void Init()
 
         FpsLimiter.Init(mode, fFpsLimit);
         FpsLimiterCutscenes.Init(mode, fFpsLimit / fCutsceneSpeedFactor);
+        FpsLimiterCutscenes30Locked.Init(mode, 30.0f);
 
         pattern = hook::pattern("A1 ? ? ? ? 83 EC 1C");
         shsub_648AC0 = safetyhook::create_inline(pattern.get_first(0), sub_648AC0);
@@ -257,8 +393,10 @@ void Init()
             {
                 if (fFpsLimit && ((nLoading && !*nLoading) && (bCutscene && !*bCutscene)))
                     FpsLimiter.Sync();
-                else if (bCutscene && *bCutscene)
+                else if (bCutscene && *bCutscene && !b30FpsCutscenes)
                     FpsLimiterCutscenes.Sync();
+                else if (bCutscene && *bCutscene && b30FpsCutscenes)
+                    FpsLimiterCutscenes30Locked.Sync();
             });
 
         if (bFixGameSpeed)
@@ -306,9 +444,12 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD reason, LPVOID lpReserved)
     }
     if (reason == DLL_PROCESS_DETACH)
     {
+        g_BackupThreadRunning = false;
+
+        if (g_BackupDirHandle != INVALID_HANDLE_VALUE)
+            CancelIoEx(g_BackupDirHandle, nullptr);
         if (nFrameLimitType == FrameLimiter::FPSLimitMode::FPS_ACCURATE)
             timeEndPeriod(1);
     }
     return TRUE;
 }
-

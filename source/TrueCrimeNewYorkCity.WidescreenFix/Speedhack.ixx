@@ -4,14 +4,15 @@ module;
 
 export module Speedhack;
 
+CIniReader iniReader("");
+export bool b30FpsCutscenes = iniReader.ReadInteger("FRAMELIMIT", "30FpsCutscenes", 1) != 0;
 export bool* bPause = nullptr;
 export bool* bCutscene = nullptr;
 export uint32_t* nLoading = nullptr;
 export float fGameSpeedFactor = 1.0f;
 export float fCutsceneSpeedFactor = 1.0f;
 export float fFpsLimit; // default
-export bool fAlternateSpinlock;
-
+export bool* fAlternateSpinlock = nullptr;
 static float lastMultiplier = 1.0f;
 
 struct SimpleLock
@@ -165,9 +166,13 @@ export float GetSpeedhackMultiplier()
     {
         wanted = 1.0f;
     }
-    if ((bCutscene && *bCutscene))// || (nLoading && *nLoading))
+    if ((bCutscene && *bCutscene) && !b30FpsCutscenes)
     {
         wanted = fCutsceneSpeedFactor;
+    }
+    if ((bCutscene && *bCutscene) && b30FpsCutscenes)
+    {
+        wanted = 1.0f;
     }
     if ((bCutscene && !*bCutscene) && (nLoading && !*nLoading))
     {

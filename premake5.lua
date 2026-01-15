@@ -528,6 +528,9 @@ group "Win32"
 project "TotalOverdose.WidescreenFix"
    setpaths("Z:/WFP/Games/Total Overdose/", "TOD.exe")
 
+project "TrueCrimeNewYorkCity.BackupSaves"
+   setpaths("Z:/WFP/Games/True Crime New York City/", "True Crime New York City.exe")
+
 project "TrueCrimeNewYorkCity.WidescreenFix"
    setpaths("Z:/WFP/Games/True Crime New York City/", "True Crime New York City.exe")
 

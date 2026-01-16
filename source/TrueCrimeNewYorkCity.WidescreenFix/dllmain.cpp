@@ -1,4 +1,4 @@
-﻿#include "stdafx.h"
+#include "stdafx.h"
 #include <mmsystem.h>
 #pragma comment(lib, "winmm.lib")
 
@@ -17,8 +17,6 @@ struct Screen
     float fHudScale;
     float fHudOffset;
 } Screen;
-
-float fFpsLimit;
 
 int32_t nFrameLimitType;
 class FrameLimiter

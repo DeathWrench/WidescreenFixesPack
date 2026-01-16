@@ -136,12 +136,7 @@ export float GetSpeedhackMultiplier()
     {
         cutsceneActive = true;
     }
-    bool loadingActive = false;;
-    if ((b60FpsCutscenes) && (fFpsLimit >= 60.0f) && nLoading && *nLoading)
-    {
-        loadingActive = true;
-    }
-    speedMultiplier = (loadingActive || cutsceneActive)
+    speedMultiplier = (cutsceneActive)
         ? fCutsceneSpeedFactor
         : fGameSpeedFactor;
 

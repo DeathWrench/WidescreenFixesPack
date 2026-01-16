@@ -1,4 +1,4 @@
-﻿module;
+module;
 
 #include <stdafx.h>
 
@@ -131,13 +131,16 @@ void SynchronizeTimeBase(float newMultiplier)
 
 export float GetSpeedhackMultiplier()
 {
-    bool loadingActive = false;
     bool cutsceneActive = false;
-    if (b60FpsCutscenes && bCutscene)
-        cutsceneActive = *bCutscene;
-    if (b60FpsCutscenes && nLoading)
-    bool loadingActive = (nLoading && *nLoading);
-
+    if ((b60FpsCutscenes) && bCutscene && *bCutscene)
+    {
+        cutsceneActive = true;
+    }
+    bool loadingActive = false;;
+    if ((b60FpsCutscenes) && nLoading && *nLoading)
+    {
+        loadingActive = false;
+    }
     speedMultiplier = (loadingActive || cutsceneActive)
         ? fCutsceneSpeedFactor
         : fGameSpeedFactor;
@@ -201,7 +204,7 @@ DWORD WINAPI timeGetTimeHook()
 export void InitSpeedhack()
 {
     CIniReader iniReader("");
-    static bool b60FpsCutscenes = iniReader.ReadInteger("FRAMELIMIT", "60FpsCutscenes", 1) != 0;
+    b60FpsCutscenes = iniReader.ReadInteger("FRAMELIMIT", "60FpsCutscenes", 1) != 0;
     auto pattern = hook::pattern("88 15 ? ? ? ? 8D 45");
     bPause = *pattern.get_first<bool*>(2);
 

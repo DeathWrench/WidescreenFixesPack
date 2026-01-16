@@ -9,7 +9,7 @@ export bool* bCutscene = nullptr;
 export uint32_t* nLoading = nullptr;
 
 export bool b60FpsCutscenes = false;
-
+export float fFpsLimit = 30.0f;
 export float fGameSpeedFactor = 1.0f;
 export float fCutsceneSpeedFactor = 1.0f;
 
@@ -132,12 +132,12 @@ void SynchronizeTimeBase(float newMultiplier)
 export float GetSpeedhackMultiplier()
 {
     bool cutsceneActive = false;
-    if ((b60FpsCutscenes) && bCutscene && *bCutscene)
+    if ((b60FpsCutscenes) && (fFpsLimit >= 60.0f) && bCutscene && *bCutscene)
     {
         cutsceneActive = true;
     }
     bool loadingActive = false;;
-    if ((b60FpsCutscenes) && nLoading && *nLoading)
+    if ((b60FpsCutscenes) && (fFpsLimit >= 60.0f) && nLoading && *nLoading)
     {
         loadingActive = false;
     }

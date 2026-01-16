@@ -1,4 +1,4 @@
-module;
+﻿module;
 
 #include <stdafx.h>
 
@@ -7,7 +7,13 @@ export module Speedhack;
 export bool* bPause = nullptr;
 export bool* bCutscene = nullptr;
 export uint32_t* nLoading = nullptr;
+
+export bool b60FpsCutscenes = false;
+
 export float fGameSpeedFactor = 1.0f;
+export float fCutsceneSpeedFactor = 1.0f;
+
+static float lastMultiplier = 1.0f;
 
 DWORD(WINAPI* pTimeGetTime)() = nullptr;
 
@@ -86,12 +92,62 @@ export BOOL QueryRealPerformanceCounter(LARGE_INTEGER* lpPerformanceCount)
     return QueryPerformanceCounter(lpPerformanceCount);
 }
 
+void SynchronizeTimeBase(float newMultiplier)
+{
+    gtcLock.lock();
+    qpcLock.lock();
+    tgtLock.lock();
+
+    float oldMultiplier = lastMultiplier;
+
+    // Snapshot current real times
+    DWORD now32 = shGetTickCount ? shGetTickCount.unsafe_stdcall<DWORD>() : GetTickCount();
+    ULONGLONG now64 = shGetTickCount64 ? shGetTickCount64.unsafe_stdcall<ULONGLONG>() : GetTickCount64();
+    LARGE_INTEGER qpcNow{};
+    if (shQueryPerformanceCounter)
+        shQueryPerformanceCounter.unsafe_stdcall<BOOL>(&qpcNow);
+    else
+        QueryPerformanceCounter(&qpcNow);
+    DWORD tgtNow = shTimeGetTime ? shTimeGetTime.unsafe_stdcall<DWORD>() : now32;
+
+    // Calculate elapsed game time with the old multiplier and bake it into the offset
+    initialOffset += DWORD((now32 - initialTime) * oldMultiplier);
+    initialOffset64 += ULONGLONG((now64 - initialTime64) * oldMultiplier);
+    initialOffsetQPC += LONGLONG((qpcNow.QuadPart - initialTimeQPC) * oldMultiplier);
+    initialOffsetTGT += DWORD((tgtNow - initialTimeTGT) * oldMultiplier);
+
+    // Reset the start time anchor to "now"
+    initialTime = now32;
+    initialTime64 = now64;
+    initialTimeQPC = qpcNow.QuadPart;
+    initialTimeTGT = tgtNow;
+
+    lastMultiplier = newMultiplier;
+
+    tgtLock.unlock();
+    qpcLock.unlock();
+    gtcLock.unlock();
+}
+
 export float GetSpeedhackMultiplier()
 {
+    bool loadingActive = false;
+    bool cutsceneActive = false;
+    if (b60FpsCutscenes && bCutscene)
+        cutsceneActive = *bCutscene;
+    if (b60FpsCutscenes && nLoading)
+    bool loadingActive = (nLoading && *nLoading);
+
+    speedMultiplier = (loadingActive || cutsceneActive)
+        ? fCutsceneSpeedFactor
+        : fGameSpeedFactor;
+
+    if (speedMultiplier != lastMultiplier)
+        SynchronizeTimeBase(speedMultiplier);
+
     return speedMultiplier;
 }
 
-// Hooked functions
 DWORD WINAPI GetTickCountHook()
 {
     float multiplier = GetSpeedhackMultiplier();
@@ -144,6 +200,8 @@ DWORD WINAPI timeGetTimeHook()
 
 export void InitSpeedhack()
 {
+    CIniReader iniReader("");
+    static bool b60FpsCutscenes = iniReader.ReadInteger("FRAMELIMIT", "60FpsCutscenes", 1) != 0;
     auto pattern = hook::pattern("88 15 ? ? ? ? 8D 45");
     bPause = *pattern.get_first<bool*>(2);
 
@@ -175,35 +233,35 @@ export void InitSpeedhack()
     }
 
     CallbackHandler::RegisterCallback(L"winmm.dll", []()
-    {
-        pTimeGetTime = (DWORD(WINAPI*)())GetProcAddress(GetModuleHandle(L"winmm.dll"), "timeGetTime");
-        if (pTimeGetTime)
         {
-            auto pattern = hook::pattern("E8 ? ? ? ? 85 C0 89 44 24 ? DB 44 24 ? 7D ? D8 05 ? ? ? ? D8 0D");
-            injector::MakeCALL(pattern.get_first(), timeGetTimeHook, true);
+            pTimeGetTime = (DWORD(WINAPI*)())GetProcAddress(GetModuleHandle(L"winmm.dll"), "timeGetTime");
+            if (pTimeGetTime)
+            {
+                auto pattern = hook::pattern("E8 ? ? ? ? 85 C0 89 44 24 ? DB 44 24 ? 7D ? D8 05 ? ? ? ? D8 0D");
+                injector::MakeCALL(pattern.get_first(), timeGetTimeHook, true);
 
-            pattern = hook::pattern("E8 ? ? ? ? 85 C0 89 44 24 ? DB 44 24 ? 7D ? D8 05 ? ? ? ? 80 3D");
-            injector::MakeCALL(pattern.get_first(), timeGetTimeHook, true);
+                pattern = hook::pattern("E8 ? ? ? ? 85 C0 89 44 24 ? DB 44 24 ? 7D ? D8 05 ? ? ? ? 80 3D");
+                injector::MakeCALL(pattern.get_first(), timeGetTimeHook, true);
 
-            pattern = hook::pattern("E8 ? ? ? ? 89 44 24 ? E8 ? ? ? ? 80 3D");
-            injector::MakeCALL(pattern.get_first(), timeGetTimeHook, true);
+                pattern = hook::pattern("E8 ? ? ? ? 89 44 24 ? E8 ? ? ? ? 80 3D");
+                injector::MakeCALL(pattern.get_first(), timeGetTimeHook, true);
 
-            //pattern = hook::pattern("E8 ? ? ? ? 80 3D ? ? ? ? ? 8B F8 0F 84");
-            //injector::MakeCALL(pattern.get_first(), timeGetTimeHook, true);
+                //pattern = hook::pattern("E8 ? ? ? ? 80 3D ? ? ? ? ? 8B F8 0F 84");
+                //injector::MakeCALL(pattern.get_first(), timeGetTimeHook, true);
 
-            pattern = hook::pattern("E8 ? ? ? ? 8D 54 24 ? 52 56 8B F8");
-            injector::MakeCALL(pattern.get_first(), timeGetTimeHook, true);
+                pattern = hook::pattern("E8 ? ? ? ? 8D 54 24 ? 52 56 8B F8");
+                injector::MakeCALL(pattern.get_first(), timeGetTimeHook, true);
 
-            pattern = hook::pattern("E8 ? ? ? ? 2B C7");
-            injector::MakeCALL(pattern.get_first(), timeGetTimeHook, true);
+                pattern = hook::pattern("E8 ? ? ? ? 2B C7");
+                injector::MakeCALL(pattern.get_first(), timeGetTimeHook, true);
 
-            pattern = hook::pattern("E8 ? ? ? ? 2B 44 24 ? 85 C0 89 44 24 ? DB 44 24 ? 7D ? D8 05 ? ? ? ? 80 3D");
-            injector::MakeCALL(pattern.get_first(), timeGetTimeHook, true);
+                pattern = hook::pattern("E8 ? ? ? ? 2B 44 24 ? 85 C0 89 44 24 ? DB 44 24 ? 7D ? D8 05 ? ? ? ? 80 3D");
+                injector::MakeCALL(pattern.get_first(), timeGetTimeHook, true);
 
-            initialOffsetTGT = pTimeGetTime();
-            initialTimeTGT = pTimeGetTime();
-        }
-    });
+                initialOffsetTGT = pTimeGetTime();
+                initialTimeTGT = pTimeGetTime();
+            }
+        });
 
     SetSpeedhackMultiplier(fGameSpeedFactor);
 

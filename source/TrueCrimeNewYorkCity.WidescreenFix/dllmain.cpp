@@ -129,7 +129,7 @@ float sub_648A70()
     return *flt_8F602C;
 }
 
-void(__cdecl* sub_62B450)() = nullptr;
+void (__cdecl* sub_62B450)() = nullptr;
 void __stdcall Thread(LPVOID a1)
 {
     LARGE_INTEGER frequency, currentTime;
@@ -169,8 +169,6 @@ void Init()
     nFrameLimitType = iniReader.ReadInteger("FRAMELIMIT", "FrameLimitType", 1);
     fFpsLimit = std::clamp(static_cast<float>(iniReader.ReadInteger("FRAMELIMIT", "FpsLimit", 30)), 30.0f, FLT_MAX);
     fGameSpeedFactor = 30.0f / fFpsLimit;
-
-    fCutsceneSpeedFactor = 60.0f / fFpsLimit;
 
     fSensitivityFactor = iniReader.ReadFloat("MOUSE", "SensitivityFactor", 0.0f);
 
@@ -286,10 +284,10 @@ void Init()
 
         pattern = hook::pattern("8B 76 ? 8B 16 53");
         static auto FPSLimiterPresent = safetyhook::create_mid(pattern.get_first(), [](SafetyHookContext& regs)
-            {
-                if (nFrameLimitType > 0 && fFpsLimit)
-                    FpsLimiter.Sync();
-            });
+        {
+            if (nFrameLimitType > 0 && fFpsLimit)
+                FpsLimiter.Sync();
+        });
 
         pattern = hook::pattern("A1 ? ? ? ? 83 C0 01 A3 ? ? ? ? A1");
         sub_62B450 = (decltype(sub_62B450))pattern.get_first();
@@ -313,9 +311,9 @@ void Init()
 CEXP void InitializeASI()
 {
     std::call_once(CallbackHandler::flag, []()
-        {
-            CallbackHandler::RegisterCallbackAtGetSystemTimeAsFileTime(Init, hook::pattern("BF 94 00 00 00 8B C7"));
-        });
+    {
+        CallbackHandler::RegisterCallbackAtGetSystemTimeAsFileTime(Init, hook::pattern("BF 94 00 00 00 8B C7"));
+    });
 }
 
 BOOL APIENTRY DllMain(HMODULE hModule, DWORD reason, LPVOID lpReserved)

@@ -129,7 +129,7 @@ float sub_648A70()
     return *flt_8F602C;
 }
 
-void (__cdecl* sub_62B450)() = nullptr;
+void(__cdecl* sub_62B450)() = nullptr;
 void __stdcall Thread(LPVOID a1)
 {
     LARGE_INTEGER frequency, currentTime;
@@ -170,7 +170,8 @@ void Init()
 
     nFrameLimitType = iniReader.ReadInteger("FRAMELIMIT", "FrameLimitType", 1);
     fFpsLimit = std::clamp(static_cast<float>(iniReader.ReadInteger("FRAMELIMIT", "FpsLimit", 30)), 30.0f, FLT_MAX);
-    fGameSpeedFactor = 30.0f / fFpsLimit;
+
+    fGameSpeedFactor = (fFpsLimit < 60.0f) ? 1.0f : (60.0f / fFpsLimit); // fps below 60 clamp this to 1
 
     fSensitivityFactor = iniReader.ReadFloat("MOUSE", "SensitivityFactor", 0.0f);
 
@@ -288,10 +289,10 @@ void Init()
 
         pattern = hook::pattern("8B 76 ? 8B 16 53");
         static auto FPSLimiterPresent = safetyhook::create_mid(pattern.get_first(), [](SafetyHookContext& regs)
-        {
-            if (nFrameLimitType > 0 && fFpsLimit)
-                FpsLimiter.Sync();
-        });
+            {
+                if (nFrameLimitType > 0 && fFpsLimit)
+                    FpsLimiter.Sync();
+            });
 
         pattern = hook::pattern("A1 ? ? ? ? 83 C0 01 A3 ? ? ? ? A1");
         sub_62B450 = (decltype(sub_62B450))pattern.get_first();
@@ -299,29 +300,32 @@ void Init()
         pattern = hook::pattern("56 8B 35 ? ? ? ? 57 8B 3D ? ? ? ? 8B FF");
         injector::MakeJMP(pattern.get_first(), Thread, true);
 
-        pattern = hook::pattern("0F 84 ? ? ? ? 80 3D ? ? ? ? ? 75 ? 84 DB");
-        injector::WriteMemory<uint16_t>(pattern.get_first(), 0xE990, true);
+        if (fFpsLimit > 30.0f) // only hook if fps limit above 30
+        {
+            pattern = hook::pattern("0F 84 ? ? ? ? 80 3D ? ? ? ? ? 75 ? 84 DB");
+            injector::MakeNOP(pattern.get_first(0), 6, true);
+            injector::MakeNOP(pattern.get_first(13), 2, true);
+        }
 
         InitSpeedhack();
     }
 
-    if (fSensitivityFactor)
+    if (fSensitivityFactor > 0)
     {
-        //bugged, todo
-        //pattern = hook::pattern("F3 0F 11 05 ? ? ? ? C7 05 ? ? ? ? ? ? ? ? 0F 84");
-        //fMouseSens = *pattern.get_first<float*>(4);
-        //
-        //pattern = hook::pattern("80 7C 24 ? ? F3 0F 10 05 ? ? ? ? 56");
-        //shsub_652340 = safetyhook::create_inline(pattern.get_first(0), sub_652340);
+        pattern = hook::pattern("F3 0F 11 05 ? ? ? ? C7 05 ? ? ? ? ? ? ? ? 0F 84");
+        fMouseSens = *pattern.get_first<float*>(4);
+
+        pattern = hook::pattern("80 7C 24 ? ? F3 0F 10 05 ? ? ? ? 56");
+        shsub_652340 = safetyhook::create_inline(pattern.get_first(0), sub_652340);
     }
 }
 
 CEXP void InitializeASI()
 {
     std::call_once(CallbackHandler::flag, []()
-    {
-        CallbackHandler::RegisterCallbackAtGetSystemTimeAsFileTime(Init, hook::pattern("BF 94 00 00 00 8B C7"));
-    });
+        {
+            CallbackHandler::RegisterCallbackAtGetSystemTimeAsFileTime(Init, hook::pattern("BF 94 00 00 00 8B C7"));
+        });
 }
 
 BOOL APIENTRY DllMain(HMODULE hModule, DWORD reason, LPVOID lpReserved)

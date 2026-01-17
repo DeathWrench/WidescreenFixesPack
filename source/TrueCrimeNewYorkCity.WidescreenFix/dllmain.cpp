@@ -134,7 +134,9 @@ void __stdcall Thread(LPVOID a1)
 {
     LARGE_INTEGER frequency, currentTime;
     double lastTime, elapsed;
-    const double targetFrameTime = ((0.5f / fGameSpeedFactor) * (1.0f / fFpsLimit)) * 1000.0; // ms
+    const double msPerFrame = 1000.0 / fFpsLimit; // ms per frame at the requested FPS
+    // account for game speed factor, then apply the 0.5 scaling
+    const double targetFrameTime = (msPerFrame / fGameSpeedFactor) * 0.5; // ms
 
     QueryPerformanceFrequency(&frequency);
     QueryRealPerformanceCounter(&currentTime);
@@ -272,6 +274,8 @@ void Init()
     {
         if (nFrameLimitType > 0)
         {
+            fFpsLimit *= fGameSpeedFactor;
+
             auto mode = (nFrameLimitType == 2) ? FrameLimiter::FPSLimitMode::FPS_ACCURATE : FrameLimiter::FPSLimitMode::FPS_REALTIME;
             if (mode == FrameLimiter::FPSLimitMode::FPS_ACCURATE)
                 timeBeginPeriod(1);
@@ -295,16 +299,20 @@ void Init()
         pattern = hook::pattern("56 8B 35 ? ? ? ? 57 8B 3D ? ? ? ? 8B FF");
         injector::MakeJMP(pattern.get_first(), Thread, true);
 
+        pattern = hook::pattern("0F 84 ? ? ? ? 80 3D ? ? ? ? ? 75 ? 84 DB");
+        injector::WriteMemory<uint16_t>(pattern.get_first(), 0xE990, true);
+
         InitSpeedhack();
     }
 
     if (fSensitivityFactor)
     {
-        pattern = hook::pattern("F3 0F 11 05 ? ? ? ? C7 05 ? ? ? ? ? ? ? ? 0F 84");
-        fMouseSens = *pattern.get_first<float*>(4);
-
-        pattern = hook::pattern("80 7C 24 ? ? F3 0F 10 05 ? ? ? ? 56");
-        shsub_652340 = safetyhook::create_inline(pattern.get_first(0), sub_652340);
+        //bugged, todo
+        //pattern = hook::pattern("F3 0F 11 05 ? ? ? ? C7 05 ? ? ? ? ? ? ? ? 0F 84");
+        //fMouseSens = *pattern.get_first<float*>(4);
+        //
+        //pattern = hook::pattern("80 7C 24 ? ? F3 0F 10 05 ? ? ? ? 56");
+        //shsub_652340 = safetyhook::create_inline(pattern.get_first(0), sub_652340);
     }
 }
 

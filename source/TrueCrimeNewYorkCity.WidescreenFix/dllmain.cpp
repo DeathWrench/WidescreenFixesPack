@@ -170,8 +170,10 @@ void Init()
 
     nFrameLimitType = iniReader.ReadInteger("FRAMELIMIT", "FrameLimitType", 1);
     fFpsLimit = std::clamp(static_cast<float>(iniReader.ReadInteger("FRAMELIMIT", "FpsLimit", 30)), 30.0f, FLT_MAX);
+    bool b60FpsMode = iniReader.ReadInteger("FRAMELIMIT", "60FpsMode", 1) != 0;
 
-    fGameSpeedFactor = (fFpsLimit < 60.0f) ? 1.0f : (60.0f / fFpsLimit); // fps below 60 clamp this to 1
+    const bool usingLegacyTiming = (!b60FpsMode || fFpsLimit < 60.0f);
+    fGameSpeedFactor = usingLegacyTiming ? (30.0f / fFpsLimit) : std::min(1.0f, 60.0f / fFpsLimit);
 
     fSensitivityFactor = iniReader.ReadFloat("MOUSE", "SensitivityFactor", 0.0f);
 
@@ -300,11 +302,15 @@ void Init()
         pattern = hook::pattern("56 8B 35 ? ? ? ? 57 8B 3D ? ? ? ? 8B FF");
         injector::MakeJMP(pattern.get_first(), Thread, true);
 
-        if (fFpsLimit > 30.0f) // only hook if fps limit above 30
-        {
+        if (!usingLegacyTiming) {
             pattern = hook::pattern("0F 84 ? ? ? ? 80 3D ? ? ? ? ? 75 ? 84 DB");
             injector::MakeNOP(pattern.get_first(0), 6, true);
             injector::MakeNOP(pattern.get_first(13), 2, true);
+        }
+        else
+        {
+            pattern = hook::pattern("0F 84 ? ? ? ? 80 3D ? ? ? ? ? 75 ? 84 DB");
+            injector::WriteMemory<uint16_t>(pattern.get_first(), 0xE990, true);
         }
 
         InitSpeedhack();
